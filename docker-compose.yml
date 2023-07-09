@@ -1,0 +1,29 @@
+version: "3.9"
+services:
+  api:
+    environment:
+      - NAME_DB=<DB_NAME_SECRET>
+      - HOST_DB=<DB_HOST_SECRET>
+      - USER_DB=<DB_USER_SECRET>
+      - PW_DB=<DB_NAME_SECRET>
+      - PORT_DB=<DB_PORT_SECRET>
+      - HOST=<HOST>
+      - PORT=<PORT>
+    build: api/.
+    ports:
+      - 8001:8001
+  socket:
+    environment:
+      - NAME_DB=<DB_NAME_SECRET>
+      - HOST_DB=<DB_HOST_SECRET>
+      - USER_DB=<DB_USER_SECRET>
+      - PW_DB=<DB_NAME_SECRET>
+      - PORT_DB=<DB_PORT_SECRET>
+      - HOST=<HOST>
+      - PORT=<PORT>
+      - BEARER=<BEARER>
+      - CHANNEL=<CHANNEL>
+      - SECRET_KEY=<SECRET_KEY>
+    build: socket/.
+    ports:
+      - 8000:8000
