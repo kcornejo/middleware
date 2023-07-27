@@ -12,10 +12,12 @@ CREATE TABLE contact(
 CREATE TABLE message(
    id INT GENERATED ALWAYS AS IDENTITY,
    contact_id INT,
-   "content" VARCHAR(255) NOT NULL,
+   "content" VARCHAR NOT NULL,
    "type" VARCHAR(10),
    datetime timestamp not null,
    sended boolean not null,
+   "error" VARCHAR,
+   error_count INT,
    PRIMARY KEY(id),
    CONSTRAINT fk_customer
       FOREIGN KEY(contact_id) 
@@ -23,7 +25,7 @@ CREATE TABLE message(
 );
 CREATE TABLE log(
    id INT GENERATED ALWAYS AS IDENTITY,
-   "content" VARCHAR(255) NOT NULL,
+   "content" VARCHAR NOT NULL,
    datetime timestamp not null,
    PRIMARY KEY(id)
 );

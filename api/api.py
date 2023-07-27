@@ -61,8 +61,8 @@ def new_message():
                     result = cursor.fetchone()
                     mydb.commit()
                     if result:
-                        sql = "INSERT INTO message(contact_id, content, type, datetime, sended) VALUES(%s, %s, %s, %s,%s)"
-                        cursor.execute(sql, (result[0], body, 'Output', datetime.now(), False))
+                        sql = "INSERT INTO message(contact_id, content, type, datetime, sended, error, error_count) VALUES(%s, %s, %s, %s,%s, %s, %s)"
+                        cursor.execute(sql, (result[0], body, 'Output', datetime.now(), False, '', 0))
                         mydb.commit()
                 except:
                     mydb.commit()
