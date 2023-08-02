@@ -4,6 +4,7 @@ DROP TABLE IF EXISTS message;
 CREATE TABLE contact(
    id INT GENERATED ALWAYS AS IDENTITY,
    identifier VARCHAR(255) NOT NULL,
+   "name" VARCHAR(255),
    blocked boolean NOT NULL,
    id_api VARCHAR(255) NOT NULL,
    PRIMARY KEY(id)
@@ -29,3 +30,5 @@ CREATE TABLE log(
    datetime timestamp not null,
    PRIMARY KEY(id)
 );
+
+ALTER TABLE contact ADD "name" varchar(255) NULL;

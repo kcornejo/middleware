@@ -43,8 +43,9 @@ class Log:
         except Exception as e:
             print("Error en insert " + repr(e))
 class Contact:
-    def __init__(self, identifier, blocked, id_api):
+    def __init__(self, identifier, name, blocked, id_api):
         self.identifier = identifier
+        self.name = name
         self.blocked = blocked
         self.id = 0
         self.id_api = id_api
@@ -55,8 +56,8 @@ class Contact:
                         password=password,
                         port=port_db)
         cursor=mydb.cursor()
-        sql = "UPDATE contact SET identifier = %s, blocked = %s, id_api=%s WHERE id = %s"
-        val = (self.identifier, self.blocked, self.id_api, self.id)
+        sql = "UPDATE contact SET identifier = %s, name = %s, blocked = %s, id_api=%s WHERE id = %s"
+        val = (self.identifier,self.name, self.blocked, self.id_api, self.id)
         cursor.execute(sql, val)
         mydb.commit()
         mydb.close()        
@@ -67,8 +68,8 @@ class Contact:
                         password=password,
                         port=port_db)
         cursor=mydb.cursor()        
-        sql = 'INSERT INTO contact(identifier, blocked,id_api) VALUES(%s,%s,%s) RETURNING id'
-        cursor.execute(sql, (self.identifier, self.blocked, self.id_api))
+        sql = 'INSERT INTO contact(identifier, name, blocked,id_api) VALUES(%s,%s,%s,%s) RETURNING id'
+        cursor.execute(sql, (self.identifier,self.name, self.blocked, self.id_api))
         mydb.commit()
         self.id = int(cursor.fetchone()[0])
         mydb.close()
@@ -85,7 +86,7 @@ class Contact:
                         password=password,
                         port=port_db)
         cursor=mydb.cursor()
-        sql = "SELECT id, identifier, blocked,id_api FROM contact where identifier=%s LIMIT 1"
+        sql = "SELECT id, identifier, blocked,id_api, name FROM contact where identifier=%s LIMIT 1"
         cursor.execute(sql, (identifier,))
         try:
             result = cursor.fetchone()
@@ -96,6 +97,7 @@ class Contact:
                 self.identifier = result[1]
                 self.blocked = result[2]
                 self.id_api = result[3]
+                self.name = result[4]
                 return self
             return result
         except:
@@ -132,7 +134,7 @@ class Contact:
 
             url = "https://api2.frontapp.com/contacts"
             payload = json.dumps({
-            "name": self.identifier,
+            "name": self.name,
             "handles": [
                 {
                 "source": "phone",
@@ -156,7 +158,7 @@ class Contact:
             log.save_db()
 #Class
 class Message:
-    def __init__(self, contact_id, content, type, datetime, sended, id, contact_id_api,contact_identifier, error, error_count):
+    def __init__(self, contact_id, content, type, datetime, sended, id, contact_id_api,contact_identifier, error, error_count, contact_name):
         self.contact_id = contact_id
         self.content = content
         self.type = type
@@ -167,6 +169,7 @@ class Message:
         self.contact_identifier = contact_identifier
         self.error = error
         self.error_count = error_count
+        self.contact_name = contact_name
     def update_db(self):
         mydb = psycopg2.connect(database=database,
                         host=host_db,
@@ -224,14 +227,14 @@ class Message:
                         password=password,
                         port=port_db)
         cursor=mydb.cursor()              
-        cursor.execute("SELECT message.id,contact_id, content, type, datetime, sended, contact.id_api,contact.identifier, message.error, message.error_count  FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Input' order by message.id asc FOR UPDATE")
+        cursor.execute("SELECT message.id,contact_id, content, type, datetime, sended, contact.id_api,contact.identifier, message.error, message.error_count, contact.name  FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Input' order by message.id asc FOR UPDATE")
         result = cursor.fetchall()
         mydb.commit()
         mydb.close()
         if len(result) > 0:
             list_message = []
             for obj in result:
-                list_message.append(Message(obj[1], obj[2], obj[3], obj[4], obj[5], obj[0], obj[6], obj[7], obj[8], obj[9]))
+                list_message.append(Message(obj[1], obj[2], obj[3], obj[4], obj[5], obj[0], obj[6], obj[7], obj[8], obj[9], obj[10]))
             return list_message
         else:
             return False
@@ -242,7 +245,7 @@ class Message:
                         password=password,
                         port=port_db)
         cursor=mydb.cursor()              
-        sql = "SELECT message.id,contact_id, content, type, datetime, sended,  contact.id_api,contact.identifier,message.error, message.error_count   FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Output' and contact.identifier=%s order by message.id asc"
+        sql = "SELECT message.id,contact_id, content, type, datetime, sended,  contact.id_api,contact.identifier,message.error, message.error_count, contact.name   FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Output' and contact.identifier=%s order by message.id asc"
         cursor.execute(sql, (id, ))
         result = cursor.fetchall()
         mydb.commit()
@@ -250,7 +253,7 @@ class Message:
         if len(result) > 0:
             list_message = []
             for obj in result:
-                list_message.append(Message(obj[1], obj[2], obj[3], obj[4], obj[5], obj[0], obj[6], obj[7], obj[8], obj[9]))
+                list_message.append(Message(obj[1], obj[2], obj[3], obj[4], obj[5], obj[0], obj[6], obj[7], obj[8], obj[9], obj[10]))
             return list_message
         else:
             return False              
@@ -268,7 +271,7 @@ def  manage_messages_send():
                         payload = json.dumps({
                             "sender": {
                                 "contact_id": message.contact_id_api,
-                                "name": message.contact_identifier,
+                                "name": message.contact_name,
                                 "handle": message.contact_identifier,
                             },
                             "body_format": "markdown",
@@ -319,15 +322,16 @@ async def echo(websocket):
         if counter == False:
             id = message
             counter = True
-            pattern = r"^\+[0-9]{1,3}\s?[0-9]{6,12}$"
+            pattern = r"^[A-Za-z\s]{1,50}\|\+[0-9]{1,3}\s?[0-9]{6,12}$"
             log = Log(f"New Client: {id}")
             log.save_db()
             if re.fullmatch(pattern, id):
-                await websocket.send(f"Welcome {id}")
-                contact = Contact(id, False, '')
-                contact.search(id)
+                id_complete = id.split("|")
+                await websocket.send(f"Welcome {id_complete[1]}")
+                contact = Contact(id_complete[1], id_complete[0], False, '')
+                contact.search(id_complete[1])
                 contact.save()
-                manage_messages_th = threading.Thread(target=manage_messages_bt, args=(websocket, id))
+                manage_messages_th = threading.Thread(target=manage_messages_bt, args=(websocket, id_complete[1]))
                 manage_messages_th.start()
             else:
                 await websocket.send(f"Id denied {id}")
@@ -340,7 +344,7 @@ async def echo(websocket):
                         payload = json.dumps({
                             "sender": {
                                 "contact_id": contact.id_api,
-                                "name": contact.identifier,
+                                "name": contact.name,
                                 "handle": contact.identifier,
                             },
                             "body_format": "markdown",
@@ -361,7 +365,7 @@ async def echo(websocket):
                     except Exception as e:
                         log = Log('Error en envio de mensaje '+ repr(e))
                         log.save_db()                  
-                    objMessage = Message(contact.id, message, 'Input', datetime.now(), error_msg, 0, contact.id_api, contact.identifier, '', 0)
+                    objMessage = Message(contact.id, message, 'Input', datetime.now(), error_msg, 0, contact.id_api, contact.identifier, '', 0, contact.name)
                     objMessage.save()
 
 async def main():
