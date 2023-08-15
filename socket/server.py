@@ -9,10 +9,12 @@ import threading
 import psycopg2
 import os
 import requests
+import websockets
 import json
 import re
 ##Vars
-id = ''
+list_sockets = []
+list_sockets_ids = []
 #.env
 
 load_dotenv('.env')
@@ -23,6 +25,7 @@ host_db = os.environ.get('HOST_DB')
 user = os.environ.get('USER_DB')
 password = os.environ.get('PW_DB')
 port_db = os.environ.get('PORT_DB')
+
 #Class
 class Log:
     def __init__(self, content):
@@ -220,33 +223,15 @@ class Message:
             self.blocked = result[2]
             return self
         return result
-    def search_awaiting_send():
+    def search_awaiting():
         mydb = psycopg2.connect(database=database,
                         host=host_db,
                         user=user,
                         password=password,
                         port=port_db)
         cursor=mydb.cursor()              
-        cursor.execute("SELECT message.id,contact_id, content, type, datetime, sended, contact.id_api,contact.identifier, message.error, message.error_count, contact.name  FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Input' order by message.id asc FOR UPDATE")
-        result = cursor.fetchall()
-        mydb.commit()
-        mydb.close()
-        if len(result) > 0:
-            list_message = []
-            for obj in result:
-                list_message.append(Message(obj[1], obj[2], obj[3], obj[4], obj[5], obj[0], obj[6], obj[7], obj[8], obj[9], obj[10]))
-            return list_message
-        else:
-            return False
-    def search_awaiting(websocket, id):
-        mydb = psycopg2.connect(database=database,
-                        host=host_db,
-                        user=user,
-                        password=password,
-                        port=port_db)
-        cursor=mydb.cursor()              
-        sql = "SELECT message.id,contact_id, content, type, datetime, sended,  contact.id_api,contact.identifier,message.error, message.error_count, contact.name   FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Output' and contact.identifier=%s order by message.id asc"
-        cursor.execute(sql, (id, ))
+        sql = "SELECT message.id,contact_id, content, type, datetime, sended,  contact.id_api,contact.identifier,message.error, message.error_count, contact.name   FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Output' order by message.id asc"
+        cursor.execute(sql)
         result = cursor.fetchall()
         mydb.commit()
         mydb.close()
@@ -258,51 +243,22 @@ class Message:
         else:
             return False              
 #Functions
-def  manage_messages_send():
-    for interval in IntervalTimer(1):
-            #DB to Api
-            messages = Message.search_awaiting_send()
-            if(messages):
-                for message in messages:
-                    if message.contact_id_api == '':
-                        continue
-                    try:
-                        url = "https://api2.frontapp.com/channels/"+os.environ.get('CHANNEL')+"/incoming_messages"
-                        payload = json.dumps({
-                            "sender": {
-                                "contact_id": message.contact_id_api,
-                                "name": message.contact_name,
-                                "handle": message.contact_identifier,
-                            },
-                            "body_format": "markdown",
-                            "body": message.content
-                        })
-                        headers = {
-                        'Authorization': 'Bearer '+os.environ.get('BEARER'),
-                        'Content-Type': 'application/json'
-                        }
-
-                        response = requests.request("POST", url, headers=headers, data=payload)
-                        response_json = response.json()
-                        if('status' in response_json and response_json['status'] == 'accepted'):
-                            message.sended= True
-                            message.save()
-                    except Exception as e:
-                        log = Log('Error en envio de mensaje '+ repr(e))
-                        log.save_db()  
-def manage_messages_bt(websocket, id):                        
-    asyncio.run(manage_messages(websocket, id))
+def manage_messages_bt():                        
+    asyncio.run(manage_messages())
     
-async def manage_messages(websocket, id):
+async def manage_messages():
     for interval in IntervalTimer(1):
             #DB to Client
-            messages = Message.search_awaiting(websocket, id)
+            messages = Message.search_awaiting()
             if(messages):
                 for message in messages:
                     try:
-                        await websocket.send(message.content)
-                        message.sended= True
-                        message.save()      
+                        id = list_sockets_ids.index(message.contact_identifier)
+                        if(id >= 0):
+                            websocket = list_sockets[id]
+                            await websocket.send(message.content)
+                            message.sended= True
+                            message.save()      
                     except Exception as e:
                         print(repr(e))
                         log = Log(repr(e))
@@ -312,61 +268,126 @@ async def manage_messages(websocket, id):
                         if(result <= datetime.now()):
                             message.sended = True
                     message.save() 
-##Server            
+##Server         
 async def echo(websocket):
-    if not ("Secret_Key" in websocket.request_headers and os.environ.get('SECRET_KEY') == websocket.request_headers['SECRET_KEY']):
-       await websocket.close()
+    
     counter = False
     contact = False
-    async for message in websocket:
-        if counter == False:
-            id = message
-            counter = True
-            pattern = r"^[A-Za-z\s]{1,50}\|\+[0-9]{1,3}\s?[0-9]{6,12}$"
-            log = Log(f"New Client: {id}")
-            log.save_db()
-            if re.fullmatch(pattern, id):
-                id_complete = id.split("|")
-                await websocket.send(f"Welcome {id_complete[1]}")
-                contact = Contact(id_complete[1], id_complete[0], False, '')
-                contact.search(id_complete[1])
-                contact.save()
-                manage_messages_th = threading.Thread(target=manage_messages_bt, args=(websocket, id_complete[1]))
-                manage_messages_th.start()
+    while True:
+        if not ("Secret_Key" in websocket.request_headers and os.environ.get('SECRET_KEY') == websocket.request_headers['SECRET_KEY']):
+            await websocket.close()
+        try:
+            message = await websocket.recv()
+            if counter == False:
+                id = message
+                counter = True
+                pattern = r"^[A-Za-z\s]{1,50}\|\+[0-9]{1,3}\s?[0-9]{6,12}$"
+                log = Log(f"New Client: {id}")
+                log.save_db()
+                if re.fullmatch(pattern, id):
+                    id_complete = id.split("|")
+                    await websocket.send(f"Welcome {id_complete[1]}")
+                    contact = Contact(id_complete[1], id_complete[0], False, '')
+                    contact.search(id_complete[1])
+                    contact.save()
+                    list_sockets_ids.append(id_complete[1])
+                    list_sockets.append(websocket)
+                else:
+                    await websocket.send(f"Id denied {id}")
+                    await websocket.close()
             else:
-                await websocket.send(f"Id denied {id}")
-                await websocket.close()
-        else:
-            if contact:
-                    error_msg = False
-                    try:
-                        url = "https://api2.frontapp.com/channels/"+os.environ.get('CHANNEL')+"/incoming_messages"
-                        payload = json.dumps({
-                            "sender": {
-                                "contact_id": contact.id_api,
-                                "name": contact.name,
-                                "handle": contact.identifier,
-                            },
-                            "body_format": "markdown",
-                            "body": message
-                        })
-                        headers = {
-                        'Authorization': 'Bearer '+os.environ.get('BEARER'),
-                        'Content-Type': 'application/json'
-                        }
+                if contact:
+                        error_msg = False
+                        try:
+                            url = "https://api2.frontapp.com/channels/"+os.environ.get('CHANNEL')+"/incoming_messages"
+                            payload = json.dumps({
+                                "sender": {
+                                    "contact_id": contact.id_api,
+                                    "name": contact.name,
+                                    "handle": contact.identifier,
+                                },
+                                "body_format": "markdown",
+                                "body": message
+                            })
+                            headers = {
+                            'Authorization': 'Bearer '+os.environ.get('BEARER'),
+                            'Content-Type': 'application/json'
+                            }
 
-                        response = requests.request("POST", url, headers=headers, data=payload)
-                        response_json = response.json()
-                        if('status' in response_json and response_json['status'] == 'accepted'):
-                            error_msg = True
-                        else:
-                            log = Log('Error en envio de mensaje '+ json.dumps(response_json))
-                            log.save_db()    
-                    except Exception as e:
-                        log = Log('Error en envio de mensaje '+ repr(e))
-                        log.save_db()                  
-                    objMessage = Message(contact.id, message, 'Input', datetime.now(), error_msg, 0, contact.id_api, contact.identifier, '', 0, contact.name)
-                    objMessage.save()
+                            response = requests.request("POST", url, headers=headers, data=payload)
+                            response_json = response.json()
+                            if('status' in response_json and response_json['status'] == 'accepted'):
+                                error_msg = True
+                            else:
+                                log = Log('Error en envio de mensaje '+ json.dumps(response_json))
+                                log.save_db()    
+                        except Exception as e:
+                            log = Log('Error en envio de mensaje '+ repr(e))
+                            log.save_db()                  
+                        objMessage = Message(contact.id, message, 'Input', datetime.now(), error_msg, 0, contact.id_api, contact.identifier, '', 0, contact.name)
+                        objMessage.save()
+        except websockets.ConnectionClosedOK:
+            if(contact):
+                id = list_sockets_ids.index(contact.identifier)
+                list_sockets.pop(id)
+                list_sockets_ids.pop(id)
+            await websocket.close()
+            break
+async def echoOld(websocket):
+        if not ("Secret_Key" in websocket.request_headers and os.environ.get('SECRET_KEY') == websocket.request_headers['SECRET_KEY']):
+            await websocket.close()
+        counter = False
+        contact = False
+        async for message in websocket:
+            if counter == False:
+                id = message
+                counter = True
+                pattern = r"^[A-Za-z\s]{1,50}\|\+[0-9]{1,3}\s?[0-9]{6,12}$"
+                log = Log(f"New Client: {id}")
+                log.save_db()
+                if re.fullmatch(pattern, id):
+                    id_complete = id.split("|")
+                    await websocket.send(f"Welcome {id_complete[1]}")
+                    contact = Contact(id_complete[1], id_complete[0], False, '')
+                    contact.search(id_complete[1])
+                    contact.save()
+                    list_sockets_ids.append(id_complete[1])
+                    list_sockets.append(websocket)
+                else:
+                    await websocket.send(f"Id denied {id}")
+                    await websocket.close()
+            else:
+                if contact:
+                        error_msg = False
+                        try:
+                            url = "https://api2.frontapp.com/channels/"+os.environ.get('CHANNEL')+"/incoming_messages"
+                            payload = json.dumps({
+                                "sender": {
+                                    "contact_id": contact.id_api,
+                                    "name": contact.name,
+                                    "handle": contact.identifier,
+                                },
+                                "body_format": "markdown",
+                                "body": message
+                            })
+                            headers = {
+                            'Authorization': 'Bearer '+os.environ.get('BEARER'),
+                            'Content-Type': 'application/json'
+                            }
+
+                            response = requests.request("POST", url, headers=headers, data=payload)
+                            response_json = response.json()
+                            if('status' in response_json and response_json['status'] == 'accepted'):
+                                error_msg = True
+                            else:
+                                log = Log('Error en envio de mensaje '+ json.dumps(response_json))
+                                log.save_db()    
+                        except Exception as e:
+                            log = Log('Error en envio de mensaje '+ repr(e))
+                            log.save_db()                  
+                        objMessage = Message(contact.id, message, 'Input', datetime.now(), error_msg, 0, contact.id_api, contact.identifier, '', 0, contact.name)
+                        objMessage.save()
+            
 
 async def main():
     host = os.environ.get('HOST')
@@ -378,6 +399,6 @@ async def main():
     async with serve(echo, host, port):
         await asyncio.Future() 
 
-#manage_messages_send_th = threading.Thread(target=manage_messages_send) 
-#manage_messages_send_th.start()
+manage_messages_th = threading.Thread(target=manage_messages_bt, args=())
+manage_messages_th.start()
 asyncio.run(main())
