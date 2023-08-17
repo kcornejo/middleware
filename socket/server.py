@@ -326,67 +326,23 @@ async def echo(websocket):
                             log.save_db()                  
                         objMessage = Message(contact.id, message, 'Input', datetime.now(), error_msg, 0, contact.id_api, contact.identifier, '', 0, contact.name)
                         objMessage.save()
-        except websockets.ConnectionClosedOK:
+        except (websockets.ConnectionClosedOK,websockets.ConnectionClosedError):
+            print('salio')
             if(contact):
                 id = list_sockets_ids.index(contact.identifier)
                 list_sockets.pop(id)
                 list_sockets_ids.pop(id)
             await websocket.close()
             break
-async def echoOld(websocket):
-        if not ("Secret_Key" in websocket.request_headers and os.environ.get('SECRET_KEY') == websocket.request_headers['SECRET_KEY']):
+        except Exception as e:
+            log = Log(repr(e))
+            log.save_db()
+            if(contact):
+                id = list_sockets_ids.index(contact.identifier)
+                list_sockets.pop(id)
+                list_sockets_ids.pop(id)
             await websocket.close()
-        counter = False
-        contact = False
-        async for message in websocket:
-            if counter == False:
-                id = message
-                counter = True
-                pattern = r"^[A-Za-z\s]{1,50}\|\+[0-9]{1,3}\s?[0-9]{6,12}$"
-                log = Log(f"New Client: {id}")
-                log.save_db()
-                if re.fullmatch(pattern, id):
-                    id_complete = id.split("|")
-                    await websocket.send(f"Welcome {id_complete[1]}")
-                    contact = Contact(id_complete[1], id_complete[0], False, '')
-                    contact.search(id_complete[1])
-                    contact.save()
-                    list_sockets_ids.append(id_complete[1])
-                    list_sockets.append(websocket)
-                else:
-                    await websocket.send(f"Id denied {id}")
-                    await websocket.close()
-            else:
-                if contact:
-                        error_msg = False
-                        try:
-                            url = "https://api2.frontapp.com/channels/"+os.environ.get('CHANNEL')+"/incoming_messages"
-                            payload = json.dumps({
-                                "sender": {
-                                    "contact_id": contact.id_api,
-                                    "name": contact.name,
-                                    "handle": contact.identifier,
-                                },
-                                "body_format": "markdown",
-                                "body": message
-                            })
-                            headers = {
-                            'Authorization': 'Bearer '+os.environ.get('BEARER'),
-                            'Content-Type': 'application/json'
-                            }
-
-                            response = requests.request("POST", url, headers=headers, data=payload)
-                            response_json = response.json()
-                            if('status' in response_json and response_json['status'] == 'accepted'):
-                                error_msg = True
-                            else:
-                                log = Log('Error en envio de mensaje '+ json.dumps(response_json))
-                                log.save_db()    
-                        except Exception as e:
-                            log = Log('Error en envio de mensaje '+ repr(e))
-                            log.save_db()                  
-                        objMessage = Message(contact.id, message, 'Input', datetime.now(), error_msg, 0, contact.id_api, contact.identifier, '', 0, contact.name)
-                        objMessage.save()
+            break
             
 
 async def main():
