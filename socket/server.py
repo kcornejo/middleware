@@ -1,20 +1,20 @@
 ##Imports
 from websockets.server import serve
 from datetime import datetime, timedelta
-from interval_timer import IntervalTimer
 from dotenv import load_dotenv
 
 import asyncio
 import threading
+import websockets
 import psycopg2
 import os
+import time
 import requests
-import websockets
 import json
 import re
 ##Vars
-list_sockets = []
-list_sockets_ids = []
+id = ''
+list_ids = []
 #.env
 
 load_dotenv('.env')
@@ -25,7 +25,6 @@ host_db = os.environ.get('HOST_DB')
 user = os.environ.get('USER_DB')
 password = os.environ.get('PW_DB')
 port_db = os.environ.get('PORT_DB')
-
 #Class
 class Log:
     def __init__(self, content):
@@ -223,15 +222,15 @@ class Message:
             self.blocked = result[2]
             return self
         return result
-    def search_awaiting():
+    def search_awaiting(websocket, id):
         mydb = psycopg2.connect(database=database,
                         host=host_db,
                         user=user,
                         password=password,
                         port=port_db)
         cursor=mydb.cursor()              
-        sql = "SELECT message.id,contact_id, content, type, datetime, sended,  contact.id_api,contact.identifier,message.error, message.error_count, contact.name   FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Output' order by message.id asc"
-        cursor.execute(sql)
+        sql = "SELECT message.id,contact_id, content, type, datetime, sended,  contact.id_api,contact.identifier,message.error, message.error_count, contact.name   FROM message INNER JOIN contact on message.contact_id = contact.id where sended = False and type = 'Output' and contact.identifier=%s order by message.id asc"
+        cursor.execute(sql, (id, ))
         result = cursor.fetchall()
         mydb.commit()
         mydb.close()
@@ -241,42 +240,39 @@ class Message:
                 list_message.append(Message(obj[1], obj[2], obj[3], obj[4], obj[5], obj[0], obj[6], obj[7], obj[8], obj[9], obj[10]))
             return list_message
         else:
-            return False              
+            return []              
 #Functions
-def manage_messages_bt():                        
-    asyncio.run(manage_messages())
+def manage_messages_bt(websocket, id):
+    asyncio.run(manage_messages(websocket, id))
     
-async def manage_messages():
-    for interval in IntervalTimer(1):
-            #DB to Client
-            messages = Message.search_awaiting()
-            if(messages):
-                for message in messages:
-                    try:
-                        id = list_sockets_ids.index(message.contact_identifier)
-                        if(id >= 0):
-                            websocket = list_sockets[id]
-                            await websocket.send(message.content)
-                            message.sended= True
-                            message.save()      
-                    except Exception as e:
-                        print(repr(e))
-                        log = Log(repr(e))
-                        log.save_db() 
-                        message.error = repr(e)
-                        result = message.datetime + timedelta(minutes=120)
-                        if(result <= datetime.now()):
-                            message.sended = True
-                    message.save() 
-##Server         
+async def manage_messages(websocket, id):
+    while id in list_ids:
+        #DB to Client
+        messages = Message.search_awaiting(websocket, id)
+        for message in messages:
+                try:
+                    await websocket.send(message.content)
+                    message.sended= True
+                    message.save()      
+                except Exception as e:
+                    print(repr(e))
+                    log = Log(repr(e))
+                    log.save_db() 
+                    message.error = repr(e)
+                    result = message.datetime + timedelta(minutes=120)
+                    if(result <= datetime.now()):
+                        message.sended = True
+                    message.save()
+        time.sleep(2)
+##Server            
 async def echo(websocket):
-    
-    counter = False
-    contact = False
-    while True:
+    try:
         if not ("Secret_Key" in websocket.request_headers and os.environ.get('SECRET_KEY') == websocket.request_headers['SECRET_KEY']):
             await websocket.close()
-        try:
+        counter = False
+        contact = False
+        id_contact = ""
+        while True:
             message = await websocket.recv()
             if counter == False:
                 id = message
@@ -290,8 +286,13 @@ async def echo(websocket):
                     contact = Contact(id_complete[1], id_complete[0], False, '')
                     contact.search(id_complete[1])
                     contact.save()
-                    list_sockets_ids.append(id_complete[1])
-                    list_sockets.append(websocket)
+                    id_contact = id_complete[1]
+                    if (id_contact in list_ids):
+                        await websocket.send(f"User in other session")
+                        await websocket.close()
+                    list_ids.append(id_complete[1])
+                    manage_messages_th = threading.Thread(target=manage_messages_bt, args=(websocket, id_complete[1]))
+                    manage_messages_th.start()
                 else:
                     await websocket.send(f"Id denied {id}")
                     await websocket.close()
@@ -326,25 +327,15 @@ async def echo(websocket):
                             log.save_db()                  
                         objMessage = Message(contact.id, message, 'Input', datetime.now(), error_msg, 0, contact.id_api, contact.identifier, '', 0, contact.name)
                         objMessage.save()
-        except (websockets.ConnectionClosedOK,websockets.ConnectionClosedError):
-            print('salio')
-            if(contact):
-                id = list_sockets_ids.index(contact.identifier)
-                list_sockets.pop(id)
-                list_sockets_ids.pop(id)
-            await websocket.close()
-            break
-        except Exception as e:
-            log = Log(repr(e))
-            log.save_db()
-            if(contact):
-                id = list_sockets_ids.index(contact.identifier)
-                list_sockets.pop(id)
-                list_sockets_ids.pop(id)
-            await websocket.close()
-            break
-            
-
+    except (websockets.ConnectionClosedOK,websockets.ConnectionClosedError):
+        await websocket.close()
+        if(id_contact != ""):
+            if(id_contact in list_ids):
+                list_ids.remove(id_complete[1])
+    except Exception as e:
+        print(repr(e))
+        log = Log('Error en ejecucion '+ repr(e))
+        log.save_db()         
 async def main():
     host = os.environ.get('HOST')
     port = int(os.environ.get('PORT'))
@@ -355,6 +346,4 @@ async def main():
     async with serve(echo, host, port):
         await asyncio.Future() 
 
-manage_messages_th = threading.Thread(target=manage_messages_bt, args=())
-manage_messages_th.start()
 asyncio.run(main())

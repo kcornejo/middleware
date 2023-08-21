@@ -36,12 +36,7 @@ host_db = os.environ.get('HOST_DB')
 user = os.environ.get('USER_DB')
 password = os.environ.get('PW_DB')
 port_db = os.environ.get('PORT_DB')
-mydb = psycopg2.connect(database=os.environ.get('NAME_DB'),
-                        host=os.environ.get('HOST_DB'),
-                        user=os.environ.get('USER_DB'),
-                        password=os.environ.get('PW_DB'),
-                        port=os.environ.get('PORT_DB'))
-cursor=mydb.cursor()
+
 
 #Server 
 api = Flask(__name__)
@@ -55,15 +50,29 @@ def new_message():
         if 'recipients' in contenido and 'body' in contenido:
             body = contenido['body']
             for recipient in contenido['recipients']:
+                mydb = psycopg2.connect(database=os.environ.get('NAME_DB'),
+                        host=os.environ.get('HOST_DB'),
+                        user=os.environ.get('USER_DB'),
+                        password=os.environ.get('PW_DB'),
+                        port=os.environ.get('PORT_DB'))
+                cursor=mydb.cursor()
                 sql = "SELECT id FROM contact where identifier=%s LIMIT 1"
                 cursor.execute(sql, (str(recipient['handle']),))
                 try:
                     result = cursor.fetchone()
                     mydb.commit()
+                    mydb.close()
                     if result:
+                        mydb = psycopg2.connect(database=os.environ.get('NAME_DB'),
+                        host=os.environ.get('HOST_DB'),
+                        user=os.environ.get('USER_DB'),
+                        password=os.environ.get('PW_DB'),
+                        port=os.environ.get('PORT_DB'))
+                        cursor=mydb.cursor()
                         sql = "INSERT INTO message(contact_id, content, type, datetime, sended, error, error_count) VALUES(%s, %s, %s, %s,%s, %s, %s)"
                         cursor.execute(sql, (result[0], body, 'Output', datetime.now(), False, '', 0))
                         mydb.commit()
+                        mydb.close()
                 except:
                     mydb.commit()
             return json.dumps({
